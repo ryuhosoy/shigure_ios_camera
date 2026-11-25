@@ -1,15 +1,20 @@
-import { CameraView, useCameraPermissions } from 'expo-camera';
-import { Image } from 'expo-image';
-import { useKeepAwake } from 'expo-keep-awake';
-import { useRouter } from 'expo-router';
-import { useEffect, useRef, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { CameraView, useCameraPermissions } from "expo-camera";
+import { Image } from "expo-image";
+import { useKeepAwake } from "expo-keep-awake";
+import { useRouter } from "expo-router";
+import { useEffect, useRef, useState } from "react";
+import { Pressable, StyleSheet, Text, View } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { arrayBufferToBase64, base64ToArrayBuffer } from '@/lib/base64';
-import { DEBUG_WS_PATH, INGEST_WS_PATH, useSettings, wsUrl } from '@/lib/settings';
+import { arrayBufferToBase64, base64ToArrayBuffer } from "@/lib/base64";
+import {
+  DEBUG_WS_PATH,
+  INGEST_WS_PATH,
+  useSettings,
+  wsUrl,
+} from "@/lib/settings";
 const RECONNECT_MS = 2000;
-const MIN_SEND_INTERVAL_MS = 100; // 最大 ~10fps
+const MIN_SEND_INTERVAL_MS = 2000; // 最大 ~10fps
 const RECV_STALE_MS = 2000; // これ以上下りが来なければ「画像待ち」
 const ERROR_SHOW_MS = 4000;
 
@@ -23,6 +28,11 @@ export default function MainScreen() {
   const [permission, requestPermission] = useCameraPermissions();
 
   const [sending, setSending] = useState(false);
+  /** requestPermission 直後に permission が未更新でも CameraView をマウントする */
+  const [cameraAllowed, setCameraAllowed] = useState(
+    () => permission?.granted === true,
+  );
+  const [cameraReady, setCameraReady] = useState(false);
   const [imageUri, setImageUri] = useState<string | null>(null);
   const [upOpen, setUpOpen] = useState(false);
   const [downOpen, setDownOpen] = useState(false);
@@ -30,9 +40,15 @@ export default function MainScreen() {
   const [, setTick] = useState(0);
 
   const cameraRef = useRef<CameraView>(null);
-  const cameraReady = useRef(false);
+  const cameraReadyRef = useRef(false);
   const lastRecvAt = useRef(0);
+  const lastSentAt = useRef(0);
+  const sentCount = useRef(0);
   const [pictureSize, setPictureSize] = useState<string | undefined>(undefined);
+
+  useEffect(() => {
+    if (permission?.granted) setCameraAllowed(true);
+  }, [permission?.granted]);
 
   const reportError = (msg: string) => setError({ msg, at: Date.now() });
 
@@ -50,14 +66,14 @@ export default function MainScreen() {
 
     const connect = () => {
       ws = new WebSocket(wsUrl(settings, DEBUG_WS_PATH));
-      ws.binaryType = 'arraybuffer';
+      ws.binaryType = "arraybuffer";
       ws.onopen = () => setDownOpen(true);
       ws.onmessage = (ev) => {
         let b64: string | null = null;
-        if (typeof ev.data === 'string') {
+        if (typeof ev.data === "string") {
           try {
             const msg = JSON.parse(ev.data);
-            if (typeof msg.image_base64 === 'string') b64 = msg.image_base64;
+            if (typeof msg.image_base64 === "string") b64 = msg.image_base64;
           } catch {
             // JSON以外のテキストは無視
           }
@@ -69,7 +85,8 @@ export default function MainScreen() {
           setImageUri(`data:image/jpeg;base64,${b64}`);
         }
       };
-      ws.onerror = () => reportError(`受信接続失敗 (${settings.host}:${settings.port})`);
+      ws.onerror = () =>
+        reportError(`受信接続失敗 (${settings.host}:${settings.port})`);
       ws.onclose = () => {
         setDownOpen(false);
         if (!closed) timer = setTimeout(connect, RECONNECT_MS);
@@ -93,9 +110,10 @@ export default function MainScreen() {
 
     const connect = () => {
       ws = new WebSocket(wsUrl(settings, INGEST_WS_PATH));
-      ws.binaryType = 'arraybuffer';
+      ws.binaryType = "arraybuffer";
       ws.onopen = () => setUpOpen(true);
-      ws.onerror = () => reportError(`送信接続失敗 (${settings.host}:${settings.port})`);
+      ws.onerror = () =>
+        reportError(`送信接続失敗 (${settings.host}:${settings.port})`);
       ws.onclose = () => {
         setUpOpen(false);
         if (!closed) timer = setTimeout(connect, RECONNECT_MS);
@@ -106,7 +124,12 @@ export default function MainScreen() {
     const loop = async () => {
       while (!closed) {
         const cam = cameraRef.current;
-        if (!cam || !cameraReady.current || !ws || ws.readyState !== WebSocket.OPEN) {
+        if (
+          !cam ||
+          !cameraReadyRef.current ||
+          !ws ||
+          ws.readyState !== WebSocket.OPEN
+        ) {
           await sleep(100);
           continue;
         }
@@ -120,6 +143,8 @@ export default function MainScreen() {
           });
           if (!closed && pic?.base64 && ws.readyState === WebSocket.OPEN) {
             ws.send(base64ToArrayBuffer(pic.base64));
+            lastSentAt.current = Date.now();
+            sentCount.current += 1;
           }
         } catch (e: any) {
           reportError(`撮影失敗: ${e?.message ?? e}`);
@@ -142,27 +167,40 @@ export default function MainScreen() {
   const toggleSending = async () => {
     if (sending) {
       setSending(false);
-      cameraReady.current = false;
+      cameraReadyRef.current = false;
+      setCameraReady(false);
       return;
     }
-    if (!permission?.granted) {
+    if (!permission?.granted && !cameraAllowed) {
       const res = await requestPermission();
       if (!res.granted) {
-        reportError('カメラへのアクセスが許可されていません');
+        reportError("カメラへのアクセスが許可されていません");
         return;
       }
+      setCameraAllowed(true);
     }
+    cameraReadyRef.current = false;
+    setCameraReady(false);
     setSending(true);
   };
 
   const onCameraReady = async () => {
-    cameraReady.current = true;
+    cameraReadyRef.current = true;
+    setCameraReady(true);
     if (pictureSize) return;
     try {
       const sizes = await cameraRef.current?.getAvailablePictureSizesAsync();
-      const preferred = ['1280x720', '640x480', 'Medium'].find((s) => sizes?.includes(s));
+      const preferred = ["1280x720", "640x480", "Medium"].find((s) =>
+        sizes?.includes(s),
+      );
       if (preferred) setPictureSize(preferred);
     } catch {}
+  };
+
+  const onCameraMountError = (e: { message: string }) => {
+    cameraReadyRef.current = false;
+    setCameraReady(false);
+    reportError(`カメラ起動失敗: ${e.message}`);
   };
 
   // ---- ステータス文言 ----
@@ -171,22 +209,35 @@ export default function MainScreen() {
   if (error && now - error.at < ERROR_SHOW_MS) {
     status = `エラー: ${error.msg}`;
   } else if (!sending && !downOpen) {
-    status = '未接続';
+    status = "未接続";
   } else {
-    const up = sending ? (upOpen ? '送信中' : '送信接続中…') : '送信OFF';
+    let up: string;
+    if (!sending) {
+      up = "送信OFF";
+    } else if (!cameraAllowed) {
+      up = "カメラ未許可";
+    } else if (!cameraReady) {
+      up = "カメラ起動中…";
+    } else if (!upOpen) {
+      up = "送信WS接続中…";
+    } else if (now - lastSentAt.current < 3000) {
+      up = `フレーム送信中 (${sentCount.current})`;
+    } else {
+      up = "送信WS接続済・フレーム未送信";
+    }
     const down = !downOpen
-      ? '受信未接続'
+      ? "受信未接続"
       : now - lastRecvAt.current < RECV_STALE_MS
-        ? 'デバッグ受信中'
-        : '画像待ち';
+        ? "デバッグ受信中"
+        : "画像待ち";
     status = `${up} · ${down}`;
   }
-  const isError = status.startsWith('エラー');
+  const isError = status.startsWith("エラー");
 
   return (
     <View style={styles.root}>
       {/* カメラは撮影のためだけにマウント。サーバ画像/黒背景の下に隠す */}
-      {sending && permission?.granted && (
+      {sending && cameraAllowed && (
         <CameraView
           ref={cameraRef}
           style={StyleSheet.absoluteFill}
@@ -194,7 +245,7 @@ export default function MainScreen() {
           animateShutter={false}
           pictureSize={pictureSize}
           onCameraReady={onCameraReady}
-          onMountError={(e) => reportError(`カメラ起動失敗: ${e.message}`)}
+          onMountError={onCameraMountError}
         />
       )}
 
@@ -213,7 +264,10 @@ export default function MainScreen() {
       </View>
 
       <View style={[styles.statusBar, { paddingTop: insets.top + 6 }]}>
-        <Text style={[styles.statusText, isError && styles.errorText]} numberOfLines={1}>
+        <Text
+          style={[styles.statusText, isError && styles.errorText]}
+          numberOfLines={1}
+        >
           {status}
         </Text>
       </View>
@@ -221,12 +275,20 @@ export default function MainScreen() {
       <View style={[styles.bottomBar, { paddingBottom: insets.bottom + 12 }]}>
         <Pressable
           onPress={toggleSending}
-          style={({ pressed }) => [styles.button, sending && styles.buttonOn, pressed && styles.pressed]}>
-          <Text style={styles.buttonText}>{sending ? '送信 ON' : '送信 OFF'}</Text>
+          style={({ pressed }) => [
+            styles.button,
+            sending && styles.buttonOn,
+            pressed && styles.pressed,
+          ]}
+        >
+          <Text style={styles.buttonText}>
+            {sending ? "送信 ON" : "送信 OFF"}
+          </Text>
         </Pressable>
         <Pressable
-          onPress={() => router.push('/settings')}
-          style={({ pressed }) => [styles.button, pressed && styles.pressed]}>
+          onPress={() => router.push("/settings")}
+          style={({ pressed }) => [styles.button, pressed && styles.pressed]}
+        >
           <Text style={styles.buttonText}>設定</Text>
         </Pressable>
       </View>
@@ -235,38 +297,42 @@ export default function MainScreen() {
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: '#000' },
-  cover: { backgroundColor: '#000', alignItems: 'center', justifyContent: 'center' },
-  waiting: { color: '#aaa', fontSize: 18 },
+  root: { flex: 1, backgroundColor: "#000" },
+  cover: {
+    backgroundColor: "#000",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  waiting: { color: "#aaa", fontSize: 18 },
   statusBar: {
-    position: 'absolute',
+    position: "absolute",
     top: 0,
     left: 0,
     right: 0,
     paddingHorizontal: 16,
     paddingBottom: 6,
-    backgroundColor: 'rgba(0,0,0,0.55)',
+    backgroundColor: "rgba(0,0,0,0.55)",
   },
-  statusText: { color: '#fff', fontSize: 14, textAlign: 'center' },
-  errorText: { color: '#ff6b6b' },
+  statusText: { color: "#fff", fontSize: 14, textAlign: "center" },
+  errorText: { color: "#ff6b6b" },
   bottomBar: {
-    position: 'absolute',
+    position: "absolute",
     bottom: 0,
     left: 0,
     right: 0,
-    flexDirection: 'row',
-    justifyContent: 'space-evenly',
+    flexDirection: "row",
+    justifyContent: "space-evenly",
     paddingTop: 12,
-    backgroundColor: 'rgba(0,0,0,0.55)',
+    backgroundColor: "rgba(0,0,0,0.55)",
   },
   button: {
     minWidth: 130,
     paddingVertical: 12,
     borderRadius: 10,
-    alignItems: 'center',
-    backgroundColor: '#333',
+    alignItems: "center",
+    backgroundColor: "#333",
   },
-  buttonOn: { backgroundColor: '#1f8a4c' },
+  buttonOn: { backgroundColor: "#1f8a4c" },
   pressed: { opacity: 0.7 },
-  buttonText: { color: '#fff', fontSize: 16, fontWeight: '600' },
+  buttonText: { color: "#fff", fontSize: 16, fontWeight: "600" },
 });
