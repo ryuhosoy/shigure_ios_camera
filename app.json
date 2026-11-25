@@ -1,14 +1,22 @@
 {
   "expo": {
-    "name": "shigure-ios-camera",
+    "name": "Shigure Camera",
     "slug": "shigure-ios-camera",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "shigureioscamera",
-    "userInterfaceStyle": "automatic",
+    "userInterfaceStyle": "dark",
     "ios": {
-      "icon": "./assets/expo.icon"
+      "icon": "./assets/expo.icon",
+      "bundleIdentifier": "com.example.shigureioscamera",
+      "infoPlist": {
+        "NSLocalNetworkUsageDescription": "顔認識サーバへ接続するためにローカルネットワークを使用します",
+        "NSAppTransportSecurity": {
+          "NSAllowsArbitraryLoads": true,
+          "NSAllowsLocalNetworking": true
+        }
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -31,6 +39,14 @@
           "backgroundColor": "#208AEF",
           "image": "./assets/images/splash-icon.png",
           "imageWidth": 76
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "顔認識サーバへ映像を送信するためにカメラを使用します",
+          "microphonePermission": false,
+          "recordAudioAndroid": false
         }
       ]
     ],
