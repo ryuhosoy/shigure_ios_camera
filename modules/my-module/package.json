@@ -1,0 +1,6 @@
+{
+  "name": "vision-frame-jpeg",
+  "version": "1.0.0",
+  "main": "src/MyModule.ts",
+  "private": true
+}

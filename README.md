@@ -10,18 +10,21 @@ This is an [Expo](https://expo.dev) project created with [`create-expo-app`](htt
    npm install
    ```
 
-2. Start the app
+2. **iOS 開発ビルド**（カメラ送信に Vision Camera が必要。Expo Go では動きません）
+
+   ```bash
+   npm run ios
+   ```
+
+   初回は `npx expo prebuild` が走ります。実機の場合は USB 接続または Xcode で署名してください。
+
+3. Metro のみ起動する場合
 
    ```bash
    npx expo start
    ```
 
-In the output, you'll find options to open the app in a
-
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
+   既に開発ビルドを入れた端末／シミュレータに接続して使います。
 
 You can start developing by editing the files inside the **src/app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
 
